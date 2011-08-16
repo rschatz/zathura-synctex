@@ -18,6 +18,8 @@
 #include <gtk/gtk.h>
 #include <gdk/gdkkeysyms.h>
 
+#include <sys/wait.h>
+
 /* macros */
 #define LENGTH(x) (sizeof(x)/sizeof((x)[0]))
 #define CLEAN(m) (m & ~(GDK_MOD2_MASK) & ~(GDK_BUTTON1_MASK) & ~(GDK_BUTTON2_MASK) & ~(GDK_BUTTON3_MASK) & ~(GDK_BUTTON4_MASK) & ~(GDK_BUTTON5_MASK) & ~(GDK_LEAVE_NOTIFY_MASK))
@@ -353,6 +355,12 @@ struct
   {
     gchar* file;
   } StdinSupport;
+
+  struct
+  {
+    gboolean enabled;
+    gchar* editor;
+  } SyncTex;
 } Zathura;
 
 
@@ -479,6 +487,9 @@ gboolean cb_view_button_release(GtkWidget*, GdkEventButton*, gpointer);
 gboolean cb_view_motion_notify(GtkWidget*, GdkEventMotion*, gpointer);
 gboolean cb_view_scrolled(GtkWidget*, GdkEventScroll*, gpointer);
 gboolean cb_watch_file(GFileMonitor*, GFile*, GFile*, GFileMonitorEvent, gpointer);
+
+/* synctex */
+void synctex_edit(int page, int x, int y);
 
 /* configuration */
 #include "config.h"
@@ -4737,6 +4748,10 @@ cb_view_button_release(GtkWidget* widget, GdkEventButton* event, gpointer data)
       break;
   }
 
+  if(event->state & GDK_CONTROL_MASK) {
+    synctex_edit(Zathura.PDF.page_number+1, (int)rectangle.x1, (int)rectangle.y1);
+  }
+
   /* reset points of the rectangle so that p1 is in the top-left corner
    * and p2 is in the bottom right corner */
   if(rectangle.x1 > rectangle.x2)
@@ -4808,6 +4823,36 @@ cb_watch_file(GFileMonitor* monitor, GFile* file, GFile* other_file, GFileMonito
   return TRUE;
 }
 
+
+/* synctex */
+void
+synctex_edit(int page, int x, int y) {
+  int ret, pid, status;
+  char buffer[1024];
+
+  if(!Zathura.SyncTex.enabled)
+    return;
+
+  ret = snprintf(buffer, 1024, "%d:%d:%d:%s", page, x, y, Zathura.PDF.file);
+  if(ret >= 1024)
+    return;
+
+  pid = fork();
+  if(pid) {
+    /* parent */
+    if(pid > 0)
+      waitpid(pid, &status, 0);
+  } else {
+    /* child */
+    if(Zathura.SyncTex.editor)
+      ret = execlp("synctex", "synctex", "edit", "-o", buffer, "-x", Zathura.SyncTex.editor, NULL);
+    else
+      ret = execlp("synctex", "synctex", "edit", "-o", buffer, NULL);
+    exit(ret);
+  }
+}
+
+
 /* main function */
 int main(int argc, char* argv[])
 {
@@ -4817,13 +4862,19 @@ int main(int argc, char* argv[])
   Zathura.Config.config_dir = 0;
   Zathura.Config.data_dir = 0;
 
+  Zathura.SyncTex.enabled = 0;
+  Zathura.SyncTex.editor = 0;
+
   char* config_dir = 0;
   char* data_dir = 0;
+  char* synctex_editor = 0;
   GOptionEntry entries[] =
   {
     { "reparent",   'e', 0, G_OPTION_ARG_INT,      &Zathura.UI.embed, "Reparents to window specified by xid", "xid" },
     { "config-dir", 'c', 0, G_OPTION_ARG_FILENAME, &config_dir,       "Path to the config directory",         "path" },
     { "data-dir",   'd', 0, G_OPTION_ARG_FILENAME, &data_dir,         "Path to the data directory",           "path" },
+    { "synctex",    's', 0, G_OPTION_ARG_NONE,     &Zathura.SyncTex.enabled, "Enables synctex",               NULL },
+    { "editor-command", 'x', 0, G_OPTION_ARG_STRING, &synctex_editor, "Synctex editor (this flag is forwarded to the synctex command)",       "cmd" },
     { NULL }
   };
 
@@ -4844,6 +4895,8 @@ int main(int argc, char* argv[])
     Zathura.Config.config_dir = g_strdup(config_dir);
   if (data_dir)
     Zathura.Config.data_dir = g_strdup(data_dir);
+  if (synctex_editor)
+    Zathura.SyncTex.editor = g_strdup(synctex_editor);
 
   g_thread_init(NULL);
   gdk_threads_init();
