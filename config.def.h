@@ -69,6 +69,9 @@ char* recolor_lightcolor     = "#DBDBDB";
 char* search_highlight       = "#9FBC00";
 char* select_text            = "#000000";
 
+char* synctex_highlight      = "#00BC9F";
+char* synctex_cursor         = "#0000FF";
+
 /* statusbar */
 char* default_text = "[No Name]";
 
@@ -210,6 +213,7 @@ Command commands[] = {
   {"quit",      "q",            cmd_quit,            0,            "Quit zathura" },
   {"rotate",    "r",            cmd_rotate,          0,            "Rotate the page" },
   {"set",       "s",            cmd_set,             cc_set,       "Set an option" },
+  {"synctex",   0,              cmd_synctex,         0,            "Forwards synchronization using synctex" },
   {"write",     "w",            cmd_save,            0,            "Save the document" },
   {"write!",    "w!",           cmd_savef,           0,            "Save the document (and force overwriting)" },
 };
@@ -276,6 +280,8 @@ Setting settings[] = {
   {"smooth_scrolling",       &(smooth_scrolling),                'f',   FALSE,   TRUE,    "Smooth scrolling"},
   {"statusbar_bgcolor",      &(statusbar_bgcolor),               's',   FALSE,   TRUE,    "Statusbar background color"},
   {"statusbar_fgcolor",      &(statusbar_fgcolor),               's',   FALSE,   TRUE,    "Statusbar foreground color"},
+  {"synctex_cursor",         &(synctex_cursor),                  's',   FALSE,   TRUE,    "Color of synctex cursor"},
+  {"synctex_highlight",      &(synctex_highlight),               's',   FALSE,   TRUE,    "Color of synctex highlight"},
   {"transparency",           &(transparency),                    'f',   FALSE,   FALSE,   "Transparency of rectangles"},
   {"uri_command",            &(uri_command),                     's',   FALSE,   FALSE,   "Command for opening URIs"},
   {"width",                  &(default_width),                   'i',   FALSE,   FALSE,   "Default window width"},

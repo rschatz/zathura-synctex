@@ -242,6 +242,8 @@ struct
     GdkColor recolor_lightcolor;
     GdkColor search_highlight;
     GdkColor select_text;
+    GdkColor synctex_cursor;
+    GdkColor synctex_highlight;
     PangoFontDescription *font;
   } Style;
 
@@ -360,6 +362,7 @@ struct
   {
     gboolean enabled;
     gchar* editor;
+    struct synctex_hit *hits, **last;
   } SyncTex;
 } Zathura;
 
@@ -490,6 +493,16 @@ gboolean cb_watch_file(GFileMonitor*, GFile*, GFile*, GFileMonitorEvent, gpointe
 
 /* synctex */
 void synctex_edit(int page, int x, int y);
+void synctex_view(int line, int column, const char *source);
+void synctex_clear();
+void synctex_draw(cairo_t*, int page);
+gboolean cmd_synctex(int, char**);
+
+struct synctex_hit {
+  int page;
+  double x, y, h, v, W, H;
+  struct synctex_hit *next;
+};
 
 /* configuration */
 #include "config.h"
@@ -519,6 +532,8 @@ init_look(void)
   gdk_color_parse(recolor_lightcolor,     &(Zathura.Style.recolor_lightcolor));
   gdk_color_parse(search_highlight,       &(Zathura.Style.search_highlight));
   gdk_color_parse(select_text,            &(Zathura.Style.select_text));
+  gdk_color_parse(synctex_cursor,         &(Zathura.Style.synctex_cursor));
+  gdk_color_parse(synctex_highlight,      &(Zathura.Style.synctex_highlight));
 
   pango_font_description_free(Zathura.Style.font);
   Zathura.Style.font = pango_font_description_from_string(font);
@@ -941,6 +956,9 @@ draw(int page_id)
   g_static_mutex_lock(&(Zathura.Lock.pdflib_lock));
   poppler_page_render(current_page->page, cairo);
   g_static_mutex_unlock(&(Zathura.Lock.pdflib_lock));
+
+  if(Zathura.SyncTex.enabled)
+    synctex_draw(cairo, page_id);
 
   cairo_restore(cairo);
   cairo_destroy(cairo);
@@ -4850,6 +4868,129 @@ synctex_edit(int page, int x, int y) {
       ret = execlp("synctex", "synctex", "edit", "-o", buffer, NULL);
     exit(ret);
   }
+}
+
+void
+synctex_draw(cairo_t *cairo, int page) {
+  struct synctex_hit *hit;
+
+  cairo_set_source_rgba(cairo, Zathura.Style.synctex_highlight.red, Zathura.Style.synctex_highlight.green, Zathura.Style.synctex_highlight.blue, transparency);
+  for(hit = Zathura.SyncTex.hits; hit; hit = hit->next) {
+    if(hit->page == page)
+      cairo_rectangle(cairo, hit->h, hit->v - hit->H, hit->W, hit->H);
+  }
+  cairo_fill(cairo);
+
+  cairo_set_source_rgba(cairo, Zathura.Style.synctex_cursor.red, Zathura.Style.synctex_cursor.green, Zathura.Style.synctex_cursor.blue, 1);
+  for(hit = Zathura.SyncTex.hits; hit; hit = hit->next) {
+    if(hit->page == page) {
+      cairo_arc(cairo, hit->x, hit->y, 2, 0, 2*M_PI);
+      cairo_fill(cairo);
+    }
+  }
+}
+
+void
+synctex_mark(int page, double x, double y, double h, double v, double W, double H) {
+  struct synctex_hit *hit = g_new(struct synctex_hit, 1);
+
+  hit->page = page;
+  hit->x = x;
+  hit->y = y;
+  hit->h = h;
+  hit->v = v;
+  hit->W = W;
+  hit->H = H;
+  hit->next = NULL;
+
+  *Zathura.SyncTex.last = hit;
+  Zathura.SyncTex.last = &hit->next;
+}
+
+void
+synctex_view(int line, int column, const char *source) {
+  int ret;
+  char buffer[1024];
+  FILE *data;
+
+  int page = -1;
+  double x = 0., y = 0., v = 0., h = 0., W = 0., H = 0.;
+
+  ret = snprintf(buffer, 1024, "synctex view -i '%d:%d:%s' -o '%s'", line, column, source, Zathura.PDF.file);
+  if(ret >= 1024)
+    return;
+
+  data = popen(buffer, "r");
+
+  synctex_clear();
+  while(fgets(buffer, 1024, data)) {
+    if(strncmp(buffer, "Page:", 5) == 0) {
+      page = atoi(buffer+5) - 1;
+    } else if(strncmp(buffer, "x:", 2) == 0) {
+      x = strtod(buffer+2, NULL);
+    } else if(strncmp(buffer, "y:", 2) == 0) {
+      y = strtod(buffer+2, NULL);
+    } else if(strncmp(buffer, "h:", 2) == 0) {
+      h = strtod(buffer+2, NULL);
+    } else if(strncmp(buffer, "v:", 2) == 0) {
+      v = strtod(buffer+2, NULL);
+    } else if(strncmp(buffer, "W:", 2) == 0) {
+      W = strtod(buffer+2, NULL);
+    } else if(strncmp(buffer, "H:", 2) == 0) {
+      H = strtod(buffer+2, NULL);
+      synctex_mark(page, x, y, h, v, W, H);
+    }
+  }
+
+  pclose(data);
+
+  if(Zathura.SyncTex.hits)
+    set_page(Zathura.SyncTex.hits->page);
+}
+
+void
+synctex_clear() {
+  struct synctex_hit *hits, *next;
+
+  hits = Zathura.SyncTex.hits;
+  Zathura.SyncTex.hits = NULL;
+  Zathura.SyncTex.last = &Zathura.SyncTex.hits;
+
+  while(hits) {
+    next = hits->next;
+    g_free(hits);
+    hits = next;
+  }
+}
+
+gboolean
+cmd_synctex(int argc, char **argv) {
+  int line, column, i = 0;
+  const char *source;
+
+  if(!Zathura.SyncTex.enabled)
+    return TRUE;
+
+  if(argc == 0) {
+    synctex_clear();
+    return TRUE;
+  }
+
+  if(argc < 2)
+    return FALSE;
+
+  line = atoi(argv[i++]);
+  if(argc == 2)
+    column = 0;
+  else
+    column = atoi(argv[i++]);
+  source = argv[i++];
+
+  if(argc > i)
+    return FALSE;
+
+  synctex_view(line, column, source);
+  return TRUE;
 }
 
 
